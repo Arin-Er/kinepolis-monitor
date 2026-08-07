@@ -1,0 +1,22 @@
+{
+	"$schema": "./node_modules/wrangler/config-schema.json",
+	"name": "kinepolis-odyssey-monitor",
+	"main": "src/index.js",
+	"compatibility_date": "2026-08-07",
+	"observability": {
+		"enabled": true
+	},
+	"vars": {
+		"MOVIE_PAGE_URL": "https://kinepolis.be/nl/movies/detail/35300/HO00012154/0/the-odyssey",
+		"TARGET_CINEMA": "KBRU",
+		"TARGET_FORMAT_TOKENS": "IMAX,70mm",
+		"BASELINE_DATE": "2026-09-22"
+	},
+	"kv_namespaces": [
+		{
+			"binding": "STATE",
+			"id": "490578075de9496ca9d7fcc783d82c46",
+			"remote": true
+		}
+	]
+}
