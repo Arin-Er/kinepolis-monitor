@@ -178,7 +178,7 @@ en een rechtstreekse boekingslink.
 De planning staat in `.github/workflows/monitor.yml`:
 
 ```yaml
-cron: "2-57/5 * * * *"
+cron: "*/5 * * * *"
 ```
 
 GitHub probeert hiermee ongeveer iedere vijf minuten te controleren. Geplande
@@ -187,6 +187,11 @@ runs kunnen bij drukte enkele minuten vertraging oplopen.
 Na drie mislukte downloads stuurt de Worker één Telegramwaarschuwing. Zodra een
 controle opnieuw slaagt, ontvang je een herstelmelding. Wanneer je tickets hebt,
 kun je de workflow via de GitHub Actions-pagina uitschakelen.
+
+Tijdens de testfase staat `DEBUG_NOTIFY_EVERY_SUCCESS` in `wrangler.jsonc` op
+`"true"`. Daardoor stuurt ook iedere geslaagde controle zonder nieuwe datum een
+Telegrambericht. Zet dit na de testfase op `"false"` en deploy de Worker opnieuw
+om alleen nog echte nieuwe programmatie en fout/herstelmeldingen te ontvangen.
 
 Geheimen horen nooit in broncode, `wrangler.jsonc`, screenshots of commits.
 

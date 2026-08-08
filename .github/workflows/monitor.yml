@@ -1,8 +1,9 @@
 name: Kinepolis Odyssey monitor
+run-name: Kinepolis check (${{ github.event_name }})
 
 on:
   schedule:
-    - cron: "2-57/5 * * * *"
+    - cron: "*/5 * * * *"
   workflow_dispatch:
 
 permissions:
@@ -17,6 +18,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      - name: Show trigger
+        run: echo "Triggered by ${{ github.event_name }} at $(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5

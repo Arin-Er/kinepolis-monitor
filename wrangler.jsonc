@@ -6,11 +6,15 @@
 	"observability": {
 		"enabled": true
 	},
+	"triggers": {
+		"crons": []
+	},
 	"vars": {
 		"MOVIE_PAGE_URL": "https://kinepolis.be/nl/movies/detail/35300/HO00012154/0/the-odyssey",
 		"TARGET_CINEMA": "KBRU",
 		"TARGET_FORMAT_TOKENS": "IMAX,70mm",
-		"BASELINE_DATE": "2026-09-22"
+		"BASELINE_DATE": "2026-09-22",
+		"DEBUG_NOTIFY_EVERY_SUCCESS": "true"
 	},
 	"kv_namespaces": [
 		{

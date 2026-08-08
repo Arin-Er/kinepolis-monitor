@@ -1,5 +1,6 @@
 import {
   buildNotification,
+  escapeHtml,
   extractTargetSessions,
   mergeNotifiedSessions,
   seedState,
@@ -13,8 +14,27 @@ function configFromEnv(env) {
     moviePageUrl: env.MOVIE_PAGE_URL,
     targetCinema: env.TARGET_CINEMA ?? "KBRU",
     targetFormatTokens: env.TARGET_FORMAT_TOKENS ?? "IMAX,70mm",
-    baselineDate: env.BASELINE_DATE ?? "2026-09-22"
+    baselineDate: env.BASELINE_DATE ?? "2026-09-22",
+    debugNotifyEverySuccess: env.DEBUG_NOTIFY_EVERY_SUCCESS === "true"
   };
+}
+
+function buildDebugSuccessNotification({
+  checkedAt,
+  targetSessionCount,
+  maxObservedTargetDate,
+  baselineDate
+}) {
+  return [
+    "✅ <b>Controle geslaagd (debugmodus)</b>",
+    "",
+    `Tijdstip (UTC): <code>${escapeHtml(checkedAt)}</code>`,
+    `Gevonden IMAX 70mm-sessies: <b>${targetSessionCount}</b>`,
+    `Laatste gevonden datum: <b>${escapeHtml(maxObservedTargetDate ?? "geen")}</b>`,
+    `Nieuwe sessies na ${escapeHtml(baselineDate)}: <b>0</b>`,
+    "",
+    "Er is geen nieuwe boekbare datum, maar de volledige controle is succesvol verwerkt."
+  ].join("\n");
 }
 
 async function readState(env) {
@@ -121,6 +141,22 @@ export async function processKinepolisPayload(env, payload) {
     state.lastError = null;
     await writeState(env, state);
 
+    const debugNotificationSent =
+      config.debugNotifyEverySuccess && newSessions.length === 0;
+
+    if (debugNotificationSent) {
+      await sendTelegram(
+        env,
+        buildDebugSuccessNotification({
+          checkedAt,
+          targetSessionCount: targetSessions.length,
+          maxObservedTargetDate,
+          baselineDate: config.baselineDate
+        }),
+        config.moviePageUrl
+      );
+    }
+
     if (recovered) {
       await sendTelegram(
         env,
@@ -134,7 +170,8 @@ export async function processKinepolisPayload(env, payload) {
       checkedAt,
       targetSessionCount: targetSessions.length,
       maxObservedTargetDate,
-      newSessionCount: newSessions.length
+      newSessionCount: newSessions.length,
+      debugNotificationSent
     };
   } catch (error) {
     await recordFailure(env, error);
