@@ -197,10 +197,10 @@ Na drie mislukte downloads stuurt de Worker één Telegramwaarschuwing. Zodra ee
 controle opnieuw slaagt, ontvang je een herstelmelding. Wanneer je tickets hebt,
 kun je de workflow via de GitHub Actions-pagina uitschakelen.
 
-Tijdens de testfase staat `DEBUG_NOTIFY_EVERY_SUCCESS` in `wrangler.jsonc` op
-`"true"`. Daardoor stuurt ook iedere geslaagde controle zonder nieuwe datum een
-Telegrambericht. Zet dit na de testfase op `"false"` en deploy de Worker opnieuw
-om alleen nog echte nieuwe programmatie en fout/herstelmeldingen te ontvangen.
+`DEBUG_NOTIFY_EVERY_SUCCESS` staat normaal op `"false"`. Daardoor ontvang je
+alleen echte nieuwe programmatie en fout/herstelmeldingen. Zet de variabele
+tijdelijk op `"true"` en deploy opnieuw wanneer je iedere geslaagde controle met
+een Telegrambericht wilt volgen tijdens debugging.
 
 Geheimen horen nooit in broncode, `wrangler.jsonc`, screenshots of commits.
 
