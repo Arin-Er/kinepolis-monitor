@@ -5,10 +5,11 @@ Deze monitor controleert automatisch de publieke Kinepolis-programmatie voor
 na **22 september 2026** verschijnt met zowel `IMAX` als `70mm`, ontvang je een
 Telegrammelding met de uren en rechtstreekse boekingslinks.
 
-De oplossing gebruikt twee gratis onderdelen:
+De oplossing gebruikt twee gratis diensten:
 
-- een GitHub Action haalt ongeveer iedere vijf minuten de programmatie op;
-- een Cloudflare Worker filtert de sessies, bewaart de toestand in KV en stuurt
+- een Cloudflare Cron Trigger geeft iedere vijf minuten het startsein;
+- een GitHub Action haalt de programmatie op;
+- de Cloudflare Worker filtert de sessies, bewaart de toestand in KV en stuurt
   Telegrammeldingen.
 
 Deze combinatie is nodig omdat de beveiliging voor de Kinepolis-API gewone
@@ -82,6 +83,7 @@ Voer deze opdrachten één voor één uit:
 npx.cmd wrangler secret put TELEGRAM_BOT_TOKEN
 npx.cmd wrangler secret put TELEGRAM_CHAT_ID
 npx.cmd wrangler secret put MANUAL_RUN_TOKEN
+npx.cmd wrangler secret put GITHUB_ACTIONS_TOKEN
 ```
 
 Maak voor `MANUAL_RUN_TOKEN` een willekeurige waarde:
@@ -93,6 +95,11 @@ $runToken
 
 Plak die waarde bij de Wrangler-prompt en bewaar haar tijdelijk. Cloudflare kan
 de waarde later niet opnieuw tonen.
+
+Gebruik voor `GITHUB_ACTIONS_TOKEN` een fine-grained GitHub personal access
+token die alleen toegang heeft tot `Arin-Er/kinepolis-monitor`, met repository-
+permission **Actions: Read and write**. De Worker gebruikt dit token uitsluitend
+om `monitor.yml` via `workflow_dispatch` te starten.
 
 ## 5. Worker testen en deployen
 
@@ -133,11 +140,9 @@ Invoke-RestMethod -Method Post -Uri "$workerUrl/test-notification" -Headers $hea
 Alleen de handmatige run-token staat als GitHub-secret. De Telegramtoken en
 chat-ID blijven uitsluitend bij Cloudflare.
 
-Een publieke repository gebruikt gratis standaard GitHub Actions-runners. Houd
-er rekening mee dat geplande workflows in een openbaar repository na 60 dagen
-zonder repositoryactiviteit automatisch kunnen worden uitgeschakeld. Voor deze
-monitor valt de doelperiode binnen die termijn; controleer desondanks af en toe
-of de Action nog groen draait.
+Een publieke repository gebruikt gratis standaard GitHub Actions-runners. De
+planning zelf loopt bij Cloudflare; GitHub voert alleen de door Cloudflare
+gestarte `workflow_dispatch`-runs uit.
 
 ## 7. Eindcontrole
 
@@ -157,9 +162,10 @@ Een gezonde toestand bevat onder andere:
 }
 ```
 
-Een handmatige programmatiecontrole start je voortaan met **Run workflow** op
-GitHub. Het oude PowerShell-endpoint `POST /run` haalt zelf niets meer bij
-Kinepolis op.
+Een handmatige programmatiecontrole start je met **Run workflow** op GitHub. De
+automatische controles verschijnen met `cloudflare-cron` in hun runnaam en in
+de tijdelijke Telegram-debugmelding. Het oude PowerShell-endpoint `POST /run`
+haalt zelf niets meer bij Kinepolis op.
 
 ## Wat de monitor controleert
 
@@ -175,14 +181,17 @@ en een rechtstreekse boekingslink.
 
 ## Frequentie en onderhoud
 
-De planning staat in `.github/workflows/monitor.yml`:
+De planning staat in `wrangler.jsonc`:
 
-```yaml
-cron: "*/5 * * * *"
+```jsonc
+"triggers": {
+  "crons": ["*/5 * * * *"]
+}
 ```
 
-GitHub probeert hiermee ongeveer iedere vijf minuten te controleren. Geplande
-runs kunnen bij drukte enkele minuten vertraging oplopen.
+Cloudflare start hiermee iedere vijf minuten de GitHub-workflow. Een nieuwe of
+gewijzigde Cron Trigger kan volgens Cloudflare tot ongeveer 15 minuten nodig
+hebben om wereldwijd actief te worden.
 
 Na drie mislukte downloads stuurt de Worker één Telegramwaarschuwing. Zodra een
 controle opnieuw slaagt, ontvang je een herstelmelding. Wanneer je tickets hebt,
@@ -199,5 +208,5 @@ Geheimen horen nooit in broncode, `wrangler.jsonc`, screenshots of commits.
 
 - Cloudflare Workers: <https://developers.cloudflare.com/workers/>
 - Cloudflare KV: <https://developers.cloudflare.com/kv/>
-- GitHub Actions schedules: <https://docs.github.com/actions/using-workflows/events-that-trigger-workflows#schedule>
+- GitHub workflow dispatch API: <https://docs.github.com/rest/actions/workflows#create-a-workflow-dispatch-event>
 - Telegram Bot API: <https://core.telegram.org/bots/api>

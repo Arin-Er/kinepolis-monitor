@@ -59,7 +59,11 @@ def main() -> int:
     api_url = required_env("KINEPOLIS_API_URL")
     worker_url = required_env("WORKER_URL")
     token = required_env("MANUAL_RUN_TOKEN")
+    trigger_source = (
+        os.environ.get("MONITOR_TRIGGER_SOURCE", "unknown").strip() or "unknown"
+    )
     session = requests.Session(impersonate="chrome")
+    session.headers.update({"X-Monitor-Trigger": trigger_source[:80]})
 
     try:
         response = session.get(

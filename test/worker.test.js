@@ -18,14 +18,14 @@ function rawSession() {
 }
 
 function testEnv(overrides = {}) {
-  let state = null;
+  const state = new Map();
   return {
     STATE: {
-      async get() {
-        return state;
+      async get(key) {
+        return state.get(key) ?? null;
       },
-      async put(_key, value) {
-        state = JSON.parse(value);
+      async put(key, value) {
+        state.set(key, JSON.parse(value));
       }
     },
     MOVIE_PAGE_URL: "https://example.com/the-odyssey",
@@ -88,7 +88,8 @@ test("debugmodus stuurt Telegram na een succesvolle controle zonder nieuwe sessi
         method: "POST",
         headers: {
           Authorization: "Bearer test-secret",
-          "Content-Type": "application/json"
+          "Content-Type": "application/json",
+          "X-Monitor-Trigger": "cloudflare-cron"
         },
         body: JSON.stringify([rawSession()])
       }),
@@ -103,11 +104,64 @@ test("debugmodus stuurt Telegram na een succesvolle controle zonder nieuwe sessi
     const body = await response.json();
     assert.equal(body.newSessionCount, 0);
     assert.equal(body.debugNotificationSent, true);
+    assert.equal(body.triggerSource, "cloudflare-cron");
     assert.equal(telegramRequests.length, 1);
 
     const telegramBody = JSON.parse(telegramRequests[0].options.body);
     assert.match(telegramBody.text, /Controle geslaagd/);
     assert.match(telegramBody.text, /geen nieuwe boekbare datum/);
+    assert.match(telegramBody.text, /cloudflare-cron/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("Cloudflare-cron start de GitHub-workflow slechts eenmaal per tijdstip", async () => {
+  const originalFetch = globalThis.fetch;
+  const githubRequests = [];
+  const env = testEnv({ GITHUB_ACTIONS_TOKEN: "github-test-token" });
+  let noRetryCalls = 0;
+  const controller = {
+    scheduledTime: Date.parse("2026-08-08T10:00:00.000Z"),
+    cron: "*/5 * * * *",
+    noRetry() {
+      noRetryCalls += 1;
+    }
+  };
+
+  globalThis.fetch = async (url, options) => {
+    githubRequests.push({ url, options });
+    return Response.json({
+      workflow_run_id: 123,
+      html_url: "https://github.com/Arin-Er/kinepolis-monitor/actions/runs/123"
+    });
+  };
+
+  try {
+    await worker.scheduled(controller, env);
+    await worker.scheduled(controller, env);
+
+    assert.equal(githubRequests.length, 1);
+    assert.equal(noRetryCalls, 1);
+    assert.match(String(githubRequests[0].url), /actions\/workflows\/monitor\.yml\/dispatches$/);
+    assert.equal(githubRequests[0].options.method, "POST");
+    assert.equal(
+      githubRequests[0].options.headers.Authorization,
+      "Bearer github-test-token"
+    );
+    assert.deepEqual(JSON.parse(githubRequests[0].options.body), {
+      ref: "main",
+      inputs: { trigger_source: "cloudflare-cron" }
+    });
+
+    const status = await worker.fetch(
+      new Request("https://worker.example/status"),
+      env
+    );
+    const body = await status.json();
+    assert.equal(body.dispatcher.ok, true);
+    assert.equal(body.dispatcher.scheduledTime, "2026-08-08T10:00:00.000Z");
+    assert.equal(body.dispatcher.githubRunId, 123);
   } finally {
     globalThis.fetch = originalFetch;
   }

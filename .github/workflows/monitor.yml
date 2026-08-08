@@ -1,10 +1,14 @@
 name: Kinepolis Odyssey monitor
-run-name: Kinepolis check (${{ github.event_name }})
+run-name: Kinepolis check (${{ inputs.trigger_source || github.event_name }})
 
 on:
-  schedule:
-    - cron: "*/5 * * * *"
   workflow_dispatch:
+    inputs:
+      trigger_source:
+        description: Wie startte deze controle?
+        required: false
+        default: manual
+        type: string
 
 permissions:
   contents: read
@@ -19,7 +23,7 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Show trigger
-        run: echo "Triggered by ${{ github.event_name }} at $(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+        run: echo "Triggered by ${{ inputs.trigger_source || github.event_name }} at $(date -u +'%Y-%m-%dT%H:%M:%SZ')"
 
       - uses: actions/checkout@v4
 
@@ -36,4 +40,5 @@ jobs:
           KINEPOLIS_API_URL: https://kinepolisweb-programmation.kinepolis.com/api/Sessions/BE/NL/35300/WWW/Cinema/KinepolisBelgium
           WORKER_URL: https://kinepolis-odyssey-monitor.odyssey-alerts.workers.dev
           MANUAL_RUN_TOKEN: ${{ secrets.MANUAL_RUN_TOKEN }}
+          MONITOR_TRIGGER_SOURCE: ${{ inputs.trigger_source || github.event_name }}
         run: python scripts/fetch_and_push.py

@@ -8,6 +8,9 @@ import {
 } from "./monitor.js";
 
 const STATE_KEY = "odyssey-monitor-state-v1";
+const DISPATCH_STATE_KEY = "odyssey-monitor-dispatch-v1";
+const GITHUB_WORKFLOW_DISPATCH_URL =
+  "https://api.github.com/repos/Arin-Er/kinepolis-monitor/actions/workflows/monitor.yml/dispatches";
 
 function configFromEnv(env) {
   return {
@@ -23,12 +26,14 @@ function buildDebugSuccessNotification({
   checkedAt,
   targetSessionCount,
   maxObservedTargetDate,
-  baselineDate
+  baselineDate,
+  triggerSource
 }) {
   return [
     "✅ <b>Controle geslaagd (debugmodus)</b>",
     "",
     `Tijdstip (UTC): <code>${escapeHtml(checkedAt)}</code>`,
+    `Gestart door: <b>${escapeHtml(triggerSource)}</b>`,
     `Gevonden IMAX 70mm-sessies: <b>${targetSessionCount}</b>`,
     `Laatste gevonden datum: <b>${escapeHtml(maxObservedTargetDate ?? "geen")}</b>`,
     `Nieuwe sessies na ${escapeHtml(baselineDate)}: <b>0</b>`,
@@ -43,6 +48,14 @@ async function readState(env) {
 
 async function writeState(env, state) {
   await env.STATE.put(STATE_KEY, JSON.stringify(state));
+}
+
+async function readDispatchState(env) {
+  return env.STATE.get(DISPATCH_STATE_KEY, { type: "json" });
+}
+
+async function writeDispatchState(env, state) {
+  await env.STATE.put(DISPATCH_STATE_KEY, JSON.stringify(state));
 }
 
 async function sendTelegram(env, text, moviePageUrl) {
@@ -101,9 +114,10 @@ async function recordFailure(env, error) {
   }
 }
 
-export async function processKinepolisPayload(env, payload) {
+export async function processKinepolisPayload(env, payload, metadata = {}) {
   const config = configFromEnv(env);
   const checkedAt = new Date().toISOString();
+  const triggerSource = metadata.triggerSource ?? "unknown";
 
   try {
     const targetSessions = extractTargetSessions(payload, config);
@@ -138,6 +152,7 @@ export async function processKinepolisPayload(env, payload) {
     state.maxObservedTargetDate = maxObservedTargetDate;
     state.targetSessionCount = targetSessions.length;
     state.lastSource = "github-actions";
+    state.lastTrigger = triggerSource;
     state.lastError = null;
     await writeState(env, state);
 
@@ -151,7 +166,8 @@ export async function processKinepolisPayload(env, payload) {
           checkedAt,
           targetSessionCount: targetSessions.length,
           maxObservedTargetDate,
-          baselineDate: config.baselineDate
+          baselineDate: config.baselineDate,
+          triggerSource
         }),
         config.moviePageUrl
       );
@@ -171,7 +187,8 @@ export async function processKinepolisPayload(env, payload) {
       targetSessionCount: targetSessions.length,
       maxObservedTargetDate,
       newSessionCount: newSessions.length,
-      debugNotificationSent
+      debugNotificationSent,
+      triggerSource
     };
   } catch (error) {
     await recordFailure(env, error);
@@ -213,16 +230,114 @@ function json(value, status = 200) {
   });
 }
 
+function requestTriggerSource(request) {
+  return (request.headers.get("X-Monitor-Trigger") ?? "unknown").slice(0, 80);
+}
+
+async function dispatchGitHubWorkflow(controller, env) {
+  if (!env.GITHUB_ACTIONS_TOKEN) {
+    throw new Error("Cloudflare-secret GITHUB_ACTIONS_TOKEN ontbreekt.");
+  }
+
+  const scheduledTime = new Date(controller.scheduledTime).toISOString();
+  const previous = await readDispatchState(env);
+
+  if (previous?.scheduledTime === scheduledTime) {
+    controller.noRetry();
+    return { ...previous, duplicateSkipped: true };
+  }
+
+  const dispatching = {
+    ok: false,
+    status: "dispatching",
+    scheduledTime,
+    cron: controller.cron,
+    attemptedAt: new Date().toISOString()
+  };
+  await writeDispatchState(env, dispatching);
+
+  const response = await fetch(GITHUB_WORKFLOW_DISPATCH_URL, {
+    method: "POST",
+    headers: {
+      Accept: "application/vnd.github+json",
+      Authorization: `Bearer ${env.GITHUB_ACTIONS_TOKEN}`,
+      "Content-Type": "application/json",
+      "User-Agent": "kinepolis-odyssey-monitor",
+      "X-GitHub-Api-Version": "2026-03-10"
+    },
+    body: JSON.stringify({
+      ref: "main",
+      inputs: { trigger_source: "cloudflare-cron" }
+    })
+  });
+
+  const responseText = await response.text();
+  if (!response.ok) {
+    const failed = {
+      ...dispatching,
+      status: "failed",
+      failedAt: new Date().toISOString(),
+      httpStatus: response.status,
+      error: responseText.slice(0, 500)
+    };
+    await writeDispatchState(env, failed);
+    throw new Error(
+      `GitHub workflow kon niet worden gestart (HTTP ${response.status}): ${responseText.slice(0, 300)}`
+    );
+  }
+
+  let responseBody = null;
+  if (responseText) {
+    try {
+      responseBody = JSON.parse(responseText);
+    } catch {
+      // Een succesvolle 204 heeft geen body; andere succesvolle bodies zijn optioneel.
+    }
+  }
+
+  const completed = {
+    ok: true,
+    status: "dispatched",
+    scheduledTime,
+    cron: controller.cron,
+    dispatchedAt: new Date().toISOString(),
+    githubRunId: responseBody?.workflow_run_id ?? null,
+    githubRunUrl: responseBody?.html_url ?? null
+  };
+  await writeDispatchState(env, completed);
+  return completed;
+}
+
 export default {
+  async scheduled(controller, env) {
+    try {
+      const result = await dispatchGitHubWorkflow(controller, env);
+      console.log(JSON.stringify({ event: "github_workflow_dispatch", ...result }));
+    } catch (error) {
+      console.error(
+        JSON.stringify({
+          event: "github_workflow_dispatch_failed",
+          error: String(error?.message ?? error)
+        })
+      );
+      await recordFailure(env, error);
+      throw error;
+    }
+  },
+
   async fetch(request, env) {
     const url = new URL(request.url);
 
     if (url.pathname === "/status") {
-      const state = await readState(env);
+      const [state, dispatcher] = await Promise.all([
+        readState(env),
+        readDispatchState(env)
+      ]);
       return json({
         service: "kinepolis-odyssey-monitor",
         configuredBaseline: env.BASELINE_DATE,
-        state
+        state,
+        dispatcher
       });
     }
 
@@ -231,7 +346,11 @@ export default {
 
       try {
         const payload = await request.json();
-        return json(await processKinepolisPayload(env, payload));
+        return json(
+          await processKinepolisPayload(env, payload, {
+            triggerSource: requestTriggerSource(request)
+          })
+        );
       } catch (error) {
         return json({ ok: false, error: String(error?.message ?? error) }, 502);
       }

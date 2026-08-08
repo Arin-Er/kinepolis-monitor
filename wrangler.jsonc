@@ -7,7 +7,7 @@
 		"enabled": true
 	},
 	"triggers": {
-		"crons": []
+		"crons": ["*/5 * * * *"]
 	},
 	"vars": {
 		"MOVIE_PAGE_URL": "https://kinepolis.be/nl/movies/detail/35300/HO00012154/0/the-odyssey",
