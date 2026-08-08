@@ -1,9 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import worker from "../src/index.js";
+import worker, { processKinepolisPayload } from "../src/index.js";
 
-function rawSession() {
+function rawSession(overrides = {}) {
   return {
     documentType: "session",
     complexOperator: "KBRU",
@@ -13,7 +13,8 @@ function rawSession() {
     vistaSessionId: 391453,
     rawSessionAttributes: "2D,70mm,CineK,English,IMAX,IMAX W,Large film,nl",
     isPublicScreening: true,
-    isSoldOut: false
+    isSoldOut: false,
+    ...overrides
   };
 }
 
@@ -38,23 +39,33 @@ function testEnv(overrides = {}) {
 }
 
 test("geauthenticeerde GitHub-ingest verwerkt de programmatie", async () => {
-  const response = await worker.fetch(
-    new Request("https://worker.example/ingest", {
-      method: "POST",
-      headers: {
-        Authorization: "Bearer test-secret",
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify([rawSession()])
-    }),
-    testEnv()
-  );
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => Response.json({ ok: true });
 
-  assert.equal(response.status, 200);
-  const body = await response.json();
-  assert.equal(body.ok, true);
-  assert.equal(body.targetSessionCount, 1);
-  assert.equal(body.maxObservedTargetDate, "2026-09-22");
+  try {
+    const response = await worker.fetch(
+      new Request("https://worker.example/ingest", {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer test-secret",
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify([rawSession()])
+      }),
+      testEnv({
+        TELEGRAM_BOT_TOKEN: "test-bot-token",
+        TELEGRAM_CHAT_ID: "123"
+      })
+    );
+
+    assert.equal(response.status, 200);
+    const body = await response.json();
+    assert.equal(body.ok, true);
+    assert.equal(body.targetSessionCount, 1);
+    assert.equal(body.maxObservedTargetDate, "2026-09-22");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test("ingest weigert een ongeldige token", async () => {
@@ -111,6 +122,113 @@ test("debugmodus stuurt Telegram na een succesvolle controle zonder nieuwe sessi
     assert.match(telegramBody.text, /Controle geslaagd/);
     assert.match(telegramBody.text, /geen nieuwe boekbare datum/);
     assert.match(telegramBody.text, /cloudflare-cron/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("dagelijkse heartbeat is stil, knoploos en maximaal eenmaal per Belgische dag", async () => {
+  const originalFetch = globalThis.fetch;
+  const telegramRequests = [];
+  const env = testEnv({
+    DAILY_HEARTBEAT_HOUR: "12",
+    TELEGRAM_BOT_TOKEN: "test-bot-token",
+    TELEGRAM_CHAT_ID: "123"
+  });
+
+  globalThis.fetch = async (url, options) => {
+    telegramRequests.push({ url, options });
+    return Response.json({ ok: true });
+  };
+
+  try {
+    const first = await processKinepolisPayload(env, [rawSession()], {
+      checkedAt: "2026-08-08T10:05:00.000Z",
+      triggerSource: "cloudflare-cron"
+    });
+    const second = await processKinepolisPayload(env, [rawSession()], {
+      checkedAt: "2026-08-08T10:10:00.000Z",
+      triggerSource: "cloudflare-cron"
+    });
+    const nextDay = await processKinepolisPayload(env, [rawSession()], {
+      checkedAt: "2026-08-09T10:05:00.000Z",
+      triggerSource: "cloudflare-cron"
+    });
+
+    assert.equal(first.heartbeatSent, true);
+    assert.equal(second.heartbeatSent, false);
+    assert.equal(nextDay.heartbeatSent, true);
+    assert.equal(telegramRequests.length, 2);
+
+    for (const request of telegramRequests) {
+      const telegramBody = JSON.parse(request.options.body);
+      assert.equal(telegramBody.text, "het werkt nog");
+      assert.equal(telegramBody.disable_notification, true);
+      assert.equal(telegramBody.reply_markup, undefined);
+    }
+
+    const status = await worker.fetch(
+      new Request("https://worker.example/status"),
+      env
+    );
+    const statusBody = await status.json();
+    assert.equal(statusBody.state.lastHeartbeatDate, "2026-08-09");
+    assert.equal(statusBody.state.lastHeartbeatAt, "2026-08-09T10:05:00.000Z");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("nieuwe programmatie gebruikt een opvallende niet-stille Telegrammelding", async () => {
+  const originalFetch = globalThis.fetch;
+  const telegramRequests = [];
+  const env = testEnv({
+    TELEGRAM_BOT_TOKEN: "test-bot-token",
+    TELEGRAM_CHAT_ID: "123"
+  });
+
+  globalThis.fetch = async (url, options) => {
+    telegramRequests.push({ url, options });
+    return Response.json({ ok: true });
+  };
+
+  try {
+    const result = await processKinepolisPayload(
+      env,
+      [
+        rawSession(),
+        rawSession({
+          businessDay: "2026-09-23T04:00:00+00:00",
+          showtime: "2026-09-23T19:00:00+00:00",
+          vistaSessionId: 500001
+        })
+      ],
+      {
+        checkedAt: "2026-08-08T08:00:00.000Z",
+        triggerSource: "cloudflare-cron"
+      }
+    );
+
+    assert.equal(result.newSessionCount, 1);
+    assert.equal(result.heartbeatSent, false);
+    assert.equal(telegramRequests.length, 1);
+
+    const telegramBody = JSON.parse(telegramRequests[0].options.body);
+    assert.match(telegramBody.text, /🚨🚨🚨/);
+    assert.match(telegramBody.text, /NIEUWE DATUM GEVONDEN/);
+    assert.match(telegramBody.text, /BOEK NU — WACHT NIET/);
+    assert.equal(telegramBody.disable_notification, false);
+    assert.match(
+      telegramBody.reply_markup.inline_keyboard[0][0].text,
+      /🚨 BOEK NU/
+    );
+
+    const status = await worker.fetch(
+      new Request("https://worker.example/status"),
+      env
+    );
+    const statusBody = await status.json();
+    assert.equal(statusBody.state.lastHeartbeatDate, "2026-08-08");
   } finally {
     globalThis.fetch = originalFetch;
   }

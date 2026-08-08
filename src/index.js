@@ -1,7 +1,9 @@
 import {
+  belgianDateForInstant,
   buildNotification,
   escapeHtml,
   extractTargetSessions,
+  heartbeatDateIfDue,
   mergeNotifiedSessions,
   seedState,
   unseenBookableSessions
@@ -12,13 +14,19 @@ const DISPATCH_STATE_KEY = "odyssey-monitor-dispatch-v1";
 const GITHUB_WORKFLOW_DISPATCH_URL =
   "https://api.github.com/repos/Arin-Er/kinepolis-monitor/actions/workflows/monitor.yml/dispatches";
 
+function configuredHeartbeatHour(value) {
+  const parsed = Number(value ?? "12");
+  return Number.isInteger(parsed) && parsed >= 0 && parsed <= 23 ? parsed : 12;
+}
+
 function configFromEnv(env) {
   return {
     moviePageUrl: env.MOVIE_PAGE_URL,
     targetCinema: env.TARGET_CINEMA ?? "KBRU",
     targetFormatTokens: env.TARGET_FORMAT_TOKENS ?? "IMAX,70mm",
     baselineDate: env.BASELINE_DATE ?? "2026-09-22",
-    debugNotifyEverySuccess: env.DEBUG_NOTIFY_EVERY_SUCCESS === "true"
+    debugNotifyEverySuccess: env.DEBUG_NOTIFY_EVERY_SUCCESS === "true",
+    dailyHeartbeatHour: configuredHeartbeatHour(env.DAILY_HEARTBEAT_HOUR)
   };
 }
 
@@ -58,9 +66,30 @@ async function writeDispatchState(env, state) {
   await env.STATE.put(DISPATCH_STATE_KEY, JSON.stringify(state));
 }
 
-async function sendTelegram(env, text, moviePageUrl) {
+async function sendTelegram(env, text, options = {}) {
   if (!env.TELEGRAM_BOT_TOKEN || !env.TELEGRAM_CHAT_ID) {
     throw new Error("Telegram secrets ontbreken.");
+  }
+
+  const {
+    moviePageUrl = env.MOVIE_PAGE_URL,
+    buttonText = "Open The Odyssey bij Kinepolis",
+    includeButton = true,
+    silent = false
+  } = options;
+
+  const message = {
+    chat_id: env.TELEGRAM_CHAT_ID,
+    text,
+    parse_mode: "HTML",
+    disable_web_page_preview: true,
+    disable_notification: silent
+  };
+
+  if (includeButton) {
+    message.reply_markup = {
+      inline_keyboard: [[{ text: buttonText, url: moviePageUrl }]]
+    };
   }
 
   const response = await fetch(
@@ -68,15 +97,7 @@ async function sendTelegram(env, text, moviePageUrl) {
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        chat_id: env.TELEGRAM_CHAT_ID,
-        text,
-        parse_mode: "HTML",
-        disable_web_page_preview: true,
-        reply_markup: {
-          inline_keyboard: [[{ text: "Open The Odyssey bij Kinepolis", url: moviePageUrl }]]
-        }
-      })
+      body: JSON.stringify(message)
     }
   );
 
@@ -109,14 +130,14 @@ async function recordFailure(env, error) {
     await sendTelegram(
       env,
       `⚠️ <b>Kinepolis-monitor heeft een probleem</b>\n\nDrie controles na elkaar zijn mislukt.\n\n${String(error?.message ?? error)}`,
-      env.MOVIE_PAGE_URL
+      { moviePageUrl: env.MOVIE_PAGE_URL }
     );
   }
 }
 
 export async function processKinepolisPayload(env, payload, metadata = {}) {
   const config = configFromEnv(env);
-  const checkedAt = new Date().toISOString();
+  const checkedAt = new Date(metadata.checkedAt ?? Date.now()).toISOString();
   const triggerSource = metadata.triggerSource ?? "unknown";
 
   try {
@@ -138,7 +159,10 @@ export async function processKinepolisPayload(env, payload, metadata = {}) {
     const maxObservedTargetDate = targetSessions.at(-1)?.date ?? null;
 
     if (newSessions.length > 0) {
-      await sendTelegram(env, buildNotification(newSessions), config.moviePageUrl);
+      await sendTelegram(env, buildNotification(newSessions), {
+        moviePageUrl: config.moviePageUrl,
+        buttonText: "🚨 BOEK NU — THE ODYSSEY 🚨"
+      });
       state = mergeNotifiedSessions(state, newSessions, checkedAt);
     } else {
       state = {
@@ -154,7 +178,6 @@ export async function processKinepolisPayload(env, payload, metadata = {}) {
     state.lastSource = "github-actions";
     state.lastTrigger = triggerSource;
     state.lastError = null;
-    await writeState(env, state);
 
     const debugNotificationSent =
       config.debugNotifyEverySuccess && newSessions.length === 0;
@@ -169,7 +192,7 @@ export async function processKinepolisPayload(env, payload, metadata = {}) {
           baselineDate: config.baselineDate,
           triggerSource
         }),
-        config.moviePageUrl
+        { moviePageUrl: config.moviePageUrl }
       );
     }
 
@@ -177,9 +200,34 @@ export async function processKinepolisPayload(env, payload, metadata = {}) {
       await sendTelegram(
         env,
         "✅ <b>Kinepolis-monitor werkt opnieuw</b>\n\nDe programmatie kon opnieuw succesvol gecontroleerd worden.",
-        config.moviePageUrl
+        { moviePageUrl: config.moviePageUrl }
       );
     }
+
+    const heartbeatDate = heartbeatDateIfDue(
+      checkedAt,
+      state.lastHeartbeatDate,
+      config.dailyHeartbeatHour
+    );
+    const positiveMessageAlreadySent =
+      newSessions.length > 0 || debugNotificationSent || recovered;
+    const heartbeatSent = Boolean(heartbeatDate && !positiveMessageAlreadySent);
+
+    if (heartbeatSent) {
+      await sendTelegram(env, "het werkt nog", {
+        includeButton: false,
+        silent: true
+      });
+    }
+
+    if (positiveMessageAlreadySent || heartbeatSent) {
+      state.lastHeartbeatDate = positiveMessageAlreadySent
+        ? belgianDateForInstant(checkedAt).date
+        : heartbeatDate;
+      state.lastHeartbeatAt = checkedAt;
+    }
+
+    await writeState(env, state);
 
     return {
       ok: true,
@@ -188,6 +236,7 @@ export async function processKinepolisPayload(env, payload, metadata = {}) {
       maxObservedTargetDate,
       newSessionCount: newSessions.length,
       debugNotificationSent,
+      heartbeatSent,
       triggerSource
     };
   } catch (error) {
@@ -336,6 +385,10 @@ export default {
       return json({
         service: "kinepolis-odyssey-monitor",
         configuredBaseline: env.BASELINE_DATE,
+        dailyHeartbeat: {
+          hour: configuredHeartbeatHour(env.DAILY_HEARTBEAT_HOUR),
+          timeZone: "Europe/Brussels"
+        },
         state,
         dispatcher
       });

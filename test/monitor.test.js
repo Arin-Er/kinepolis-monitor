@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import {
   buildNotification,
   extractTargetSessions,
+  heartbeatDateIfDue,
   seedState,
   unseenBookableSessions
 } from "../src/monitor.js";
@@ -90,4 +91,22 @@ test("melding bevat datum, uur en directe boekingslink", () => {
   assert.match(message, /23 september 2026/);
   assert.match(message, /21:00/);
   assert.match(message, /direct-vista-redirect\/500001/);
+  assert.match(message, /🚨🚨🚨/);
+  assert.match(message, /NIEUWE DATUM GEVONDEN/);
+  assert.match(message, /BOEK NU — WACHT NIET/);
+});
+
+test("dagelijkse heartbeat wordt vanaf 12 uur Belgische tijd eenmaal verschuldigd", () => {
+  assert.equal(
+    heartbeatDateIfDue("2026-08-08T09:59:00.000Z", null, 12),
+    null
+  );
+  assert.equal(
+    heartbeatDateIfDue("2026-08-08T10:00:00.000Z", null, 12),
+    "2026-08-08"
+  );
+  assert.equal(
+    heartbeatDateIfDue("2026-08-08T15:00:00.000Z", "2026-08-08", 12),
+    null
+  );
 });

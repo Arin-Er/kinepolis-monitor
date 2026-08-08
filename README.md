@@ -5,6 +5,11 @@ Deze monitor controleert automatisch de publieke Kinepolis-programmatie voor
 na **22 september 2026** verschijnt met zowel `IMAX` als `70mm`, ontvang je een
 Telegrammelding met de uren en rechtstreekse boekingslinks.
 
+Rond 12:00 Belgische tijd stuurt de monitor maximaal eenmaal per dag het stille,
+knoploze chatbericht `het werkt nog`. Een echte nieuwe datum wordt daarentegen
+met een opvallende alarmtekst en boekingsknop gemeld. Als er die dag al een
+nieuwe-datummelding of herstelmelding kwam, vervangt die de dagelijkse check-in.
+
 De oplossing gebruikt twee gratis diensten:
 
 - een Cloudflare Cron Trigger geeft iedere vijf minuten het startsein;
@@ -178,6 +183,10 @@ haalt zelf niets meer bij Kinepolis op.
 
 De melding bevat de Belgische datum en tijd, het zaalnummer indien beschikbaar
 en een rechtstreekse boekingslink.
+
+Het tijdstip van de dagelijkse check-in staat in `wrangler.jsonc` als
+`DAILY_HEARTBEAT_HOUR`. De waarde `"12"` betekent de eerste succesvolle controle
+vanaf 12:00 in de tijdzone `Europe/Brussels`.
 
 ## Frequentie en onderhoud
 

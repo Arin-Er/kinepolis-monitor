@@ -121,6 +121,38 @@ export function formatDate(date) {
   }).format(new Date(`${date}T12:00:00Z`));
 }
 
+export function belgianDateForInstant(checkedAt) {
+  const instant = new Date(checkedAt);
+  if (Number.isNaN(instant.getTime())) {
+    throw new Error("Ongeldig controletijdstip voor Belgische kalenderdatum.");
+  }
+
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Europe/Brussels",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      hourCycle: "h23"
+    })
+      .formatToParts(instant)
+      .filter((part) => part.type !== "literal")
+      .map((part) => [part.type, part.value])
+  );
+
+  const belgianDate = `${parts.year}-${parts.month}-${parts.day}`;
+  return { date: belgianDate, hour: Number(parts.hour) };
+}
+
+export function heartbeatDateIfDue(checkedAt, lastHeartbeatDate, heartbeatHour = 12) {
+  const belgian = belgianDateForInstant(checkedAt);
+
+  return belgian.hour >= heartbeatHour && lastHeartbeatDate !== belgian.date
+    ? belgian.date
+    : null;
+}
+
 export function escapeHtml(value) {
   return String(value)
     .replaceAll("&", "&amp;")
@@ -151,12 +183,16 @@ export function buildNotification(sessions) {
   });
 
   return [
-    "🚨 <b>Nieuwe IMAX 70mm-programmatie!</b>",
+    "🚨🚨🚨 <b>NIEUWE DATUM GEVONDEN!</b> 🚨🚨🚨",
     "",
-    "The Odyssey — Kinepolis Brussel",
+    "🎟️ <b>THE ODYSSEY — IMAX 70MM</b>",
+    "📍 <b>KINEPOLIS BRUSSEL</b>",
+    "",
+    "⬇️ <b>NU BOEKBAAR</b> ⬇️",
     "",
     ...sections,
     "",
-    "Boek zo snel mogelijk; beschikbaarheid kan snel veranderen."
+    "⚠️ <b>BOEK NU — WACHT NIET.</b>",
+    "Beschikbaarheid kan snel veranderen."
   ].join("\n");
 }

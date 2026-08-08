@@ -14,6 +14,7 @@
 		"TARGET_CINEMA": "KBRU",
 		"TARGET_FORMAT_TOKENS": "IMAX,70mm",
 		"BASELINE_DATE": "2026-09-22",
+		"DAILY_HEARTBEAT_HOUR": "12",
 		"DEBUG_NOTIFY_EVERY_SUCCESS": "false"
 	},
 	"kv_namespaces": [
